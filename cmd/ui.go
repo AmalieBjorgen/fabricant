@@ -331,6 +331,12 @@ func (m model) executeFlowCmd() tea.Msg {
 		return errMsg{fmt.Errorf("connecting git: %w", err)}
 	}
 
+	// Initialize Git Connection
+	err = m.fabricClient.InitializeGitConnection(ctx, newWs.Id)
+	if err != nil {
+		return errMsg{fmt.Errorf("initializing git connection: %w", err)}
+	}
+
 	// Fabric requires a brief moment to initialize the git status after connection
 	time.Sleep(3 * time.Second)
 

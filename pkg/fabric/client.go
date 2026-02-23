@@ -160,6 +160,14 @@ func (c *Client) ConnectWorkspaceToGit(ctx context.Context, workspaceId string, 
 	return c.doRequest(ctx, http.MethodPost, path, req, nil)
 }
 
+// InitializeGitConnection initializes the git connection for a workspace.
+func (c *Client) InitializeGitConnection(ctx context.Context, workspaceId string) error {
+	path := fmt.Sprintf("/workspaces/%s/git/initializeConnection", workspaceId)
+	// We pass an empty initialization strategy to trigger default.
+	req := map[string]interface{}{}
+	return c.doRequest(ctx, http.MethodPost, path, req, nil)
+}
+
 // InitializeGitRequest makes workspace items git synced.
 type InitializeGitRequest struct {
 	InitializationStrategy string `json:"initializationStrategy"` // e.g. "PreferRemote"
