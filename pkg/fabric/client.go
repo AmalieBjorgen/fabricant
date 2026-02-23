@@ -122,6 +122,23 @@ func (c *Client) GetGitConnection(ctx context.Context, id string) (*GetGitConnec
 	return &resp, nil
 }
 
+// GitStatus represents the current sync status of the workspace with Git.
+type GitStatus struct {
+	RemoteCommitHash string `json:"remoteCommitHash"`
+	WorkspaceHead    string `json:"workspaceHead"`
+}
+
+// GetGitStatus calls GET /workspaces/{workspaceId}/git/status
+func (c *Client) GetGitStatus(ctx context.Context, id string) (*GitStatus, error) {
+	var resp GitStatus
+	// We might need to wait for the status to initialize or compute, it returns 200/202.
+	err := c.doRequest(ctx, http.MethodGet, "/workspaces/"+id+"/git/status", nil, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // CreateWorkspace calls POST /workspaces
 func (c *Client) CreateWorkspace(ctx context.Context, req CreateWorkspaceRequest) (*Workspace, error) {
 	var ws Workspace
@@ -149,17 +166,23 @@ type InitializeGitRequest struct {
 }
 
 // UpdateWorkspaceFromGit updates the workspace items from the linked git branch.
-func (c *Client) UpdateWorkspaceFromGit(ctx context.Context, workspaceId string) error {
+func (c *Client) UpdateWorkspaceFromGit(ctx context.Context, workspaceId string, workspaceHead string, remoteCommitHash string) error {
 	path := fmt.Sprintf("/workspaces/%s/git/updateFromGit", workspaceId)
-	// Example payload to prefer remote changes unconditionally:
+
 	req := map[string]interface{}{
+		"remoteCommitHash": remoteCommitHash,
 		"conflictResolution": map[string]string{
-			"conflictResolutionType": "PreferRemote", // Prefer remote changes in case of conflict
+			"conflictResolutionType": "PreferRemote",
 		},
 		"options": map[string]bool{
 			"allowOverrideItems": true,
 		},
 	}
+	// The API doc says workspaceHead is required if not empty. For a new workspace, we can just omit or pass empty string if it's new, but typically we must pass the current head.
+	if workspaceHead != "" {
+		req["workspaceHead"] = workspaceHead
+	}
+
 	return c.doRequest(ctx, http.MethodPost, path, req, nil)
 }
 

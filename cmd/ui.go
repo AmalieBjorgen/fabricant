@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/amaliebjorgen/fabricant/pkg/auth"
 	"github.com/amaliebjorgen/fabricant/pkg/devops"
@@ -330,8 +331,17 @@ func (m model) executeFlowCmd() tea.Msg {
 		return errMsg{fmt.Errorf("connecting git: %w", err)}
 	}
 
+	// Fabric requires a brief moment to initialize the git status after connection
+	time.Sleep(3 * time.Second)
+
+	// Get Git Status to find remoteCommitHash
+	gitStatus, err := m.fabricClient.GetGitStatus(ctx, newWs.Id)
+	if err != nil {
+		return errMsg{fmt.Errorf("getting git status: %w", err)}
+	}
+
 	// Update from Git
-	err = m.fabricClient.UpdateWorkspaceFromGit(ctx, newWs.Id)
+	err = m.fabricClient.UpdateWorkspaceFromGit(ctx, newWs.Id, gitStatus.WorkspaceHead, gitStatus.RemoteCommitHash)
 	if err != nil {
 		return errMsg{fmt.Errorf("updating from git: %w", err)}
 	}
