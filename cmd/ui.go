@@ -347,9 +347,25 @@ func (m model) executeFlowCmd() tea.Msg {
 	}
 
 	// Update from Git
-	err = m.fabricClient.UpdateWorkspaceFromGit(ctx, newWs.Id, gitStatus.WorkspaceHead, gitStatus.RemoteCommitHash)
+	opId, err := m.fabricClient.UpdateWorkspaceFromGit(ctx, newWs.Id, gitStatus.WorkspaceHead, gitStatus.RemoteCommitHash)
 	if err != nil {
 		return errMsg{fmt.Errorf("updating from git: %w", err)}
+	}
+
+	if opId != "" {
+		// Poll for completion
+		for {
+			time.Sleep(2 * time.Second)
+			status, err := m.fabricClient.GetOperationStatus(ctx, opId)
+			if err != nil {
+				return errMsg{fmt.Errorf("checking operation status: %w", err)}
+			}
+			if status.Status == "Succeeded" {
+				break
+			} else if status.Status == "Failed" {
+				return errMsg{fmt.Errorf("git sync failed: [%s] %s", status.Error.ErrorCode, status.Error.Message)}
+			}
+		}
 	}
 
 	// Update Connections

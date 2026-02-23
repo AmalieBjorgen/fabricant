@@ -28,24 +28,24 @@ func NewClient(authenticator *auth.Authenticator) *Client {
 }
 
 // doRequest performs a request against the Fabric API.
-func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}, out interface{}) error {
+func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}, out interface{}) (*http.Response, error) {
 	var reqBody io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		reqBody = bytes.NewBuffer(b)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, BaseURL+path, reqBody)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	token, err := c.auth.GetToken(ctx, []string{auth.FabricScope})
 	if err != nil {
-		return fmt.Errorf("failed to get fabric auth token: %w", err)
+		return nil, fmt.Errorf("failed to get fabric auth token: %w", err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+token.Token)
@@ -53,21 +53,22 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	// We don't defer Close here if returning early on error, but caller might need body? Actually, we'll read and decode here, so we CAN defer close.
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("fabric API error %d: %s", resp.StatusCode, string(b))
+		return resp, fmt.Errorf("fabric API error %d: %s", resp.StatusCode, string(b))
 	}
 
-	if out != nil && resp.StatusCode != http.StatusNoContent {
+	if out != nil && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusAccepted {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			return err
+			return resp, err
 		}
 	}
-	return nil
+	return resp, nil
 }
 
 // GitProviderDetails holds the configuration for a workspace's git connection.
@@ -100,7 +101,7 @@ type CreateWorkspaceRequest struct {
 // GetWorkspace calls GET /workspaces/{workspaceId}
 func (c *Client) GetWorkspace(ctx context.Context, id string) (*Workspace, error) {
 	var ws Workspace
-	err := c.doRequest(ctx, http.MethodGet, "/workspaces/"+id, nil, &ws)
+	_, err := c.doRequest(ctx, http.MethodGet, "/workspaces/"+id, nil, &ws)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +116,7 @@ type GetGitConnectionResponse struct {
 // GetGitConnection calls GET /workspaces/{workspaceId}/git/connection
 func (c *Client) GetGitConnection(ctx context.Context, id string) (*GetGitConnectionResponse, error) {
 	var resp GetGitConnectionResponse
-	err := c.doRequest(ctx, http.MethodGet, "/workspaces/"+id+"/git/connection", nil, &resp)
+	_, err := c.doRequest(ctx, http.MethodGet, "/workspaces/"+id+"/git/connection", nil, &resp)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +133,7 @@ type GitStatus struct {
 func (c *Client) GetGitStatus(ctx context.Context, id string) (*GitStatus, error) {
 	var resp GitStatus
 	// We might need to wait for the status to initialize or compute, it returns 200/202.
-	err := c.doRequest(ctx, http.MethodGet, "/workspaces/"+id+"/git/status", nil, &resp)
+	_, err := c.doRequest(ctx, http.MethodGet, "/workspaces/"+id+"/git/status", nil, &resp)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +143,7 @@ func (c *Client) GetGitStatus(ctx context.Context, id string) (*GitStatus, error
 // CreateWorkspace calls POST /workspaces
 func (c *Client) CreateWorkspace(ctx context.Context, req CreateWorkspaceRequest) (*Workspace, error) {
 	var ws Workspace
-	err := c.doRequest(ctx, http.MethodPost, "/workspaces", req, &ws)
+	_, err := c.doRequest(ctx, http.MethodPost, "/workspaces", req, &ws)
 	if err != nil {
 		return nil, err
 	}
@@ -157,30 +158,27 @@ type ConnectToGitRequest struct {
 // ConnectWorkspaceToGit links a workspace to a git repository and branch.
 func (c *Client) ConnectWorkspaceToGit(ctx context.Context, workspaceId string, req ConnectToGitRequest) error {
 	path := fmt.Sprintf("/workspaces/%s/git/connect", workspaceId)
-	return c.doRequest(ctx, http.MethodPost, path, req, nil)
+	_, err := c.doRequest(ctx, http.MethodPost, path, req, nil)
+	return err
 }
 
 // InitializeGitConnection initializes the git connection for a workspace.
 func (c *Client) InitializeGitConnection(ctx context.Context, workspaceId string) error {
 	path := fmt.Sprintf("/workspaces/%s/git/initializeConnection", workspaceId)
-	// We pass an empty initialization strategy to trigger default.
 	req := map[string]interface{}{}
-	return c.doRequest(ctx, http.MethodPost, path, req, nil)
+	_, err := c.doRequest(ctx, http.MethodPost, path, req, nil)
+	return err
 }
 
-// InitializeGitRequest makes workspace items git synced.
-type InitializeGitRequest struct {
-	InitializationStrategy string `json:"initializationStrategy"` // e.g. "PreferRemote"
-}
-
-// UpdateWorkspaceFromGit updates the workspace items from the linked git branch.
-func (c *Client) UpdateWorkspaceFromGit(ctx context.Context, workspaceId string, workspaceHead string, remoteCommitHash string) error {
+// UpdateWorkspaceFromGit updates the workspace items from the linked git branch. Returns operation ID empty string if not long-running.
+func (c *Client) UpdateWorkspaceFromGit(ctx context.Context, workspaceId string, workspaceHead string, remoteCommitHash string) (string, error) {
 	path := fmt.Sprintf("/workspaces/%s/git/updateFromGit", workspaceId)
 
 	req := map[string]interface{}{
 		"remoteCommitHash": remoteCommitHash,
 		"conflictResolution": map[string]string{
-			"conflictResolutionType": "PreferRemote",
+			"conflictResolutionType":   "Workspace",
+			"conflictResolutionPolicy": "PreferRemote",
 		},
 		"options": map[string]bool{
 			"allowOverrideItems": true,
@@ -191,7 +189,13 @@ func (c *Client) UpdateWorkspaceFromGit(ctx context.Context, workspaceId string,
 		req["workspaceHead"] = workspaceHead
 	}
 
-	return c.doRequest(ctx, http.MethodPost, path, req, nil)
+	resp, err := c.doRequest(ctx, http.MethodPost, path, req, nil)
+	if err != nil {
+		return "", err
+	}
+
+	operationId := resp.Header.Get("x-ms-operation-id")
+	return operationId, nil
 }
 
 // Connection represents a connection to a data source, e.g., Lakehouse.
@@ -210,8 +214,33 @@ type UpdateConnectionRequest struct {
 func (c *Client) UpdateConnections(ctx context.Context, workspaceId string, mappings map[string]string) error {
 	// TODO: Replace with the actual iterate and update logic depending on Lakehouse binding types in Fabric.
 	// We'll iterate the items/connections and redirect them to the new workspace's lakehouse.
-	// e.g., foreach conn in mapping: c.doRequest(ctx, "PATCH", "/connections/"+conn.Id, UpdateDetails, nil)
+	// e.g., foreach conn in mapping: _, err = c.doRequest(ctx, "PATCH", "/connections/"+conn.Id, UpdateDetails, nil)
 	return nil
+}
+
+// OperationStatus represents the response from the Fabric Operations API.
+type OperationStatus struct {
+	Status      string `json:"status"` // e.g. "NotStarted", "Running", "Succeeded", "Failed"
+	CreatedTime string `json:"createdTime,omitempty"`
+	LastUpdated string `json:"lastUpdatedTime,omitempty"`
+	Error       struct {
+		ErrorCode string `json:"errorCode"`
+		Message   string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+// GetOperationStatus calls GET /operations/{operationId}
+func (c *Client) GetOperationStatus(ctx context.Context, operationId string) (*OperationStatus, error) {
+	var resp OperationStatus
+	// Note: Operations API is typically at the tenant or workspace root? Fabric usually exposes it at /operations/
+	// Actually, Fabric Git API often returns a Location header or you poll /operations/{operationId}
+	// The API for Microsoft Fabric operations is usually GET https://api.fabric.microsoft.com/v1/operations/{id}
+	path := fmt.Sprintf("/operations/%s", operationId)
+	_, err := c.doRequest(ctx, http.MethodGet, path, nil, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // WorkspaceListResponse represents the response containing an array of Workspaces.
@@ -222,7 +251,7 @@ type WorkspaceListResponse struct {
 // ListWorkspaces calls GET /workspaces
 func (c *Client) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 	var resp WorkspaceListResponse
-	err := c.doRequest(ctx, http.MethodGet, "/workspaces", nil, &resp)
+	_, err := c.doRequest(ctx, http.MethodGet, "/workspaces", nil, &resp)
 	if err != nil {
 		return nil, err
 	}
