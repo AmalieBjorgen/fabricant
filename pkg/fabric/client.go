@@ -107,6 +107,21 @@ func (c *Client) GetWorkspace(ctx context.Context, id string) (*Workspace, error
 	return &ws, nil
 }
 
+// GetGitConnectionResponse represents the wrapper response for getting a git connection.
+type GetGitConnectionResponse struct {
+	GitProviderDetails *GitProviderDetails `json:"gitProviderDetails"`
+}
+
+// GetGitConnection calls GET /workspaces/{workspaceId}/git/connection
+func (c *Client) GetGitConnection(ctx context.Context, id string) (*GetGitConnectionResponse, error) {
+	var resp GetGitConnectionResponse
+	err := c.doRequest(ctx, http.MethodGet, "/workspaces/"+id+"/git/connection", nil, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // CreateWorkspace calls POST /workspaces
 func (c *Client) CreateWorkspace(ctx context.Context, req CreateWorkspaceRequest) (*Workspace, error) {
 	var ws Workspace

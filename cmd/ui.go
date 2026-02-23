@@ -43,6 +43,7 @@ const (
 	stateInit sessionState = iota
 	stateLoadingWorkspaces
 	stateSelectWorkspace
+	stateLoadingGit
 	stateEnterBranch
 	stateEnterWorkspace
 	stateExecuting
@@ -134,6 +135,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workspaceLst.SetItems(items)
 		m.state = stateSelectWorkspace
 		return m, nil
+	case gitConnectionMsg:
+		if msg.details == nil || msg.details.GitProviderType == "" {
+			m.err = fmt.Errorf("selected workspace does not have git integration (or unsupported provider)")
+			m.state = stateError
+			return m, nil
+		}
+		m.selectedDevWorkspace.GitProviderDetails = msg.details
+		m.state = stateEnterBranch
+		return m, textinput.Blink
 	case executionStepMsg:
 		m.executionInfos = append(m.executionInfos, msg.info)
 		return m, nil
@@ -145,7 +155,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// State-specific updates
 	switch m.state {
-	case stateInit, stateLoadingWorkspaces, stateExecuting:
+	case stateInit, stateLoadingWorkspaces, stateLoadingGit, stateExecuting:
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
 
@@ -155,14 +165,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.String() == "enter" {
 				if i, ok := m.workspaceLst.SelectedItem().(workspaceItem); ok {
 					m.selectedDevWorkspace = &i.workspace
-					// Ensure dev workspace has Git integration
-					if m.selectedDevWorkspace.GitProviderDetails == nil {
-						m.err = fmt.Errorf("selected workspace does not have git integration")
-						m.state = stateError
-						return m, nil
-					}
-					m.state = stateEnterBranch
-					return m, textinput.Blink
+					m.state = stateLoadingGit
+					return m, m.fetchGitConnectionCmd(m.selectedDevWorkspace.Id)
 				}
 			}
 		}
@@ -213,6 +217,8 @@ func (m model) View() string {
 		return fmt.Sprintf("\n %s Initializing clients...\n", m.spinner.View())
 	case stateLoadingWorkspaces:
 		return fmt.Sprintf("\n %s Loading workspaces from Fabric...\n", m.spinner.View())
+	case stateLoadingGit:
+		return fmt.Sprintf("\n %s Checking Git configuration...\n", m.spinner.View())
 	case stateSelectWorkspace:
 		return "\n" + m.workspaceLst.View()
 	case stateEnterBranch:
@@ -250,6 +256,7 @@ type clientsReadyMsg struct {
 }
 
 type workspacesMsg struct{ workspaces []fabric.Workspace }
+type gitConnectionMsg struct{ details *fabric.GitProviderDetails }
 type executionStepMsg struct{ info string }
 type executionDoneMsg struct{ msg string }
 
@@ -265,7 +272,7 @@ func initClientsCmd() tea.Msg {
 	}
 }
 
-func (m *model) fetchWorkspacesCmd() tea.Msg {
+func (m model) fetchWorkspacesCmd() tea.Msg {
 	ctx := context.Background()
 	ws, err := m.fabricClient.ListWorkspaces(ctx)
 	if err != nil {
@@ -274,7 +281,18 @@ func (m *model) fetchWorkspacesCmd() tea.Msg {
 	return workspacesMsg{workspaces: ws}
 }
 
-func (m *model) executeFlowCmd() tea.Msg {
+func (m model) fetchGitConnectionCmd(id string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		resp, err := m.fabricClient.GetGitConnection(ctx, id)
+		if err != nil {
+			return errMsg{fmt.Errorf("failed to get git connection: %w", err)}
+		}
+		return gitConnectionMsg{details: resp.GitProviderDetails}
+	}
+}
+
+func (m model) executeFlowCmd() tea.Msg {
 	ctx := context.Background()
 	gitInfo := m.selectedDevWorkspace.GitProviderDetails
 
