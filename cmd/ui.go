@@ -15,24 +15,16 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/spf13/cobra"
 )
 
-var uiCmd = &cobra.Command{
-	Use:   "ui",
-	Short: "Start the Fabricant TUI",
-	Run: func(cmd *cobra.Command, args []string) {
-		m := initialModel()
-		p := tea.NewProgram(m, tea.WithAltScreen())
-		if _, err := p.Run(); err != nil {
-			fmt.Printf("Error starting UI: %v\n", err)
-			os.Exit(1)
-		}
-	},
-}
-
-func init() {
-	rootCmd.AddCommand(uiCmd)
+// StartUI launches the interactive Terminal User Interface for Fabricant.
+func StartUI() {
+	m := initialModel()
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Printf("Error starting UI: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // ----- Styles -----
@@ -108,7 +100,7 @@ func initialModel() model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.initClientsCmd)
+	return tea.Batch(m.spinner.Tick, initClientsCmd)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -128,6 +120,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = stateError
 		return m, nil
 	case clientsReadyMsg:
+		m.authClient = msg.auth
+		m.fabricClient = msg.fabric
+		m.devopsClient = msg.devops
 		m.state = stateLoadingWorkspaces
 		return m, m.fetchWorkspacesCmd
 	case workspacesMsg:
@@ -247,20 +242,27 @@ func (m model) View() string {
 // ----- Commands (Side Effects) -----
 
 type errMsg struct{ err error }
-type clientsReadyMsg struct{}
+
+type clientsReadyMsg struct {
+	auth   *auth.Authenticator
+	fabric *fabric.Client
+	devops *devops.Client
+}
+
 type workspacesMsg struct{ workspaces []fabric.Workspace }
 type executionStepMsg struct{ info string }
 type executionDoneMsg struct{ msg string }
 
-func (m *model) initClientsCmd() tea.Msg {
+func initClientsCmd() tea.Msg {
 	a, err := auth.NewAuthenticator()
 	if err != nil {
 		return errMsg{err}
 	}
-	m.authClient = a
-	m.fabricClient = fabric.NewClient(a)
-	m.devopsClient = devops.NewClient(a)
-	return clientsReadyMsg{}
+	return clientsReadyMsg{
+		auth:   a,
+		fabric: fabric.NewClient(a),
+		devops: devops.NewClient(a),
+	}
 }
 
 func (m *model) fetchWorkspacesCmd() tea.Msg {

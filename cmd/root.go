@@ -12,8 +12,8 @@ var rootCmd = &cobra.Command{
 	Short: "Fabricant: Git Workflow TUI for Microsoft Fabric and Azure DevOps",
 	Long:  `A Terminal User Interface to help manage feature workspaces and branches in MS Fabric and Azure DevOps.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// Default action is to show help for now
-		cmd.Help()
+		// Launch the TUI as the default behavior
+		StartUI()
 	},
 }
 
